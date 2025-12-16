@@ -26,7 +26,8 @@ export const TableView: React.FC<Props> = ({
 
   // Filter the tasks before rendering
   const visibleTasks = project.tasks.filter(task => {
-    return Object.entries(filters).every(([fieldId, filterValues]) => {
+    return Object.entries(filters).every(([fieldId, val]) => {
+      const filterValues = val as string[];
       if (!filterValues || filterValues.length === 0) return true;
       const cellValue = task[fieldId];
       if (Array.isArray(cellValue)) {

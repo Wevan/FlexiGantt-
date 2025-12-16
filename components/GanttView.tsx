@@ -32,7 +32,8 @@ export const GanttView: React.FC<Props> = ({ project, filters }) => {
 
   // 3. Filter Tasks
   const visibleTasks = project.tasks.filter(task => {
-    return Object.entries(filters).every(([fieldId, filterValues]) => {
+    return Object.entries(filters).every(([fieldId, val]) => {
+      const filterValues = val as string[];
       if (!filterValues || filterValues.length === 0) return true;
       const cellValue = task[fieldId];
       if (Array.isArray(cellValue)) {

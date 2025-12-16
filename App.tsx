@@ -1,18 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { db } from './services/db';
 import { ProjectFile, TaskRecord, ViewMode, FieldDefinition, FieldOption } from './types';
-import { generateId, DEFAULT_FIELDS, COLORS } from './constants';
+import { generateId, COLORS } from './constants';
 import { ProjectCard } from './components/ProjectCard';
 import { TableView } from './components/TableView';
 import { GanttView } from './components/GanttView';
 import { 
-  Layout, Calendar, Plus, ChevronLeft, Trash2, X, Check, Users
+  Layout, Calendar, Plus, ChevronLeft, X, Trash2, Users
 } from 'lucide-react';
 
 const App: React.FC = () => {
   // --- Global State ---
   const [projects, setProjects] = useState<ProjectFile[]>([]);
   const [activeProject, setActiveProject] = useState<ProjectFile | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
   
   // --- View State ---
   const [viewMode, setViewMode] = useState<ViewMode>('table');
@@ -32,58 +33,94 @@ const App: React.FC = () => {
 
   // --- Effects ---
   useEffect(() => {
-    setProjects(db.getProjects());
+    loadProjects();
   }, []);
 
-  const refreshProject = (id: string) => {
-      const p = db.getProject(id);
-      if (p) setActiveProject({...p}); 
-      setProjects(db.getProjects());
+  const loadProjects = async () => {
+    setIsLoading(true);
+    const data = await db.getProjects();
+    setProjects(data);
+    setIsLoading(false);
+  };
+
+  const refreshProject = async (id: string) => {
+      // Parallel fetch to update list and active view
+      const [p, allP] = await Promise.all([
+          db.getProject(id),
+          db.getProjects()
+      ]);
+      
+      if (p) setActiveProject(p); 
+      setProjects(allP);
   };
 
   // --- Project Handlers ---
 
-  const handleCreateProject = () => {
+  const handleCreateProject = async () => {
       if (!newProjectName.trim()) return;
-      // Use entered team or default to 'General'
+      
       const team = newProjectTeam.trim() || 'General';
-      const newP = db.createProject(newProjectName, team, 'New project space');
-      setProjects(db.getProjects());
-      setActiveProject(newP);
-      setIsNewProjectModalOpen(false);
-      setNewProjectName('');
-      setNewProjectTeam('');
-      setActiveFilters({});
-      setViewMode('table');
+      try {
+        const newP = await db.createProject(newProjectName, team, 'New project space');
+        await loadProjects();
+        setActiveProject(newP);
+        setIsNewProjectModalOpen(false);
+        setNewProjectName('');
+        setNewProjectTeam('');
+        setActiveFilters({});
+        setViewMode('table');
+      } catch (e) {
+        alert('Failed to create project');
+      }
   };
 
-  const handleDeleteProject = (e: React.MouseEvent, id: string) => {
-      e.stopPropagation(); // Stop click from propagating to the card
+  const handleDeleteProject = async (e: React.MouseEvent, id: string) => {
+      e.stopPropagation(); 
       if (window.confirm('Are you sure you want to delete this project?')) {
-          db.deleteProject(id);
-          setProjects(db.getProjects());
+          await db.deleteProject(id);
+          await loadProjects();
           if (activeProject?.id === id) setActiveProject(null);
       }
   };
 
   // --- Task Handlers ---
 
-  const handleUpdateTask = (taskId: string, fieldId: string, value: any) => {
+  const handleUpdateTask = async (taskId: string, fieldId: string, value: any) => {
       if (!activeProject) return;
-      db.updateTask(activeProject.id, taskId, { [fieldId]: value });
+      
+      // Optimistic update for UI responsiveness
+      const updatedTasks = activeProject.tasks.map(t => 
+        t.id === taskId ? { ...t, [fieldId]: value } : t
+      );
+      setActiveProject({ ...activeProject, tasks: updatedTasks });
+
+      // API Call
+      await db.updateTask(activeProject.id, taskId, { [fieldId]: value });
+      // Silent refresh to ensure sync
       refreshProject(activeProject.id);
   };
 
-  const handleAddTask = () => {
+  const handleAddTask = async () => {
       if (!activeProject) return;
       const newTask: TaskRecord = { id: generateId() };
-      db.addTask(activeProject.id, newTask);
+      
+      // Optimistic
+      setActiveProject({ ...activeProject, tasks: [...activeProject.tasks, newTask] });
+      
+      await db.addTask(activeProject.id, newTask);
       refreshProject(activeProject.id);
   };
 
-  const handleDeleteTask = (taskId: string) => {
+  const handleDeleteTask = async (taskId: string) => {
       if (!activeProject) return;
-      db.deleteTask(activeProject.id, taskId);
+      
+      // Optimistic
+      setActiveProject({ 
+          ...activeProject, 
+          tasks: activeProject.tasks.filter(t => t.id !== taskId) 
+      });
+
+      await db.deleteTask(activeProject.id, taskId);
       refreshProject(activeProject.id);
   };
 
@@ -94,10 +131,17 @@ const App: React.FC = () => {
       setTempOptions(field.options ? [...field.options] : []);
   };
 
-  const handleSaveFieldSettings = () => {
+  const handleSaveFieldSettings = async () => {
       if (activeProject && editingField) {
-          db.updateField(activeProject.id, editingField.id, { options: tempOptions });
+          // Optimistic update of the field definition inside activeProject
+          const updatedFields = activeProject.fields.map(f => {
+              if (f.id === editingField.id) return { ...f, options: tempOptions };
+              return f;
+          });
+          setActiveProject({ ...activeProject, fields: updatedFields });
           setEditingField(null);
+
+          await db.updateField(activeProject.id, editingField.id, { options: tempOptions });
           refreshProject(activeProject.id);
       }
   };
@@ -153,7 +197,9 @@ const App: React.FC = () => {
         </header>
 
         <main className="max-w-6xl mx-auto px-6 w-full flex-1 pb-20">
-            {projects.length === 0 ? (
+            {isLoading ? (
+               <div className="flex justify-center py-20 text-gray-400">Loading projects...</div>
+            ) : projects.length === 0 ? (
                 <div className="text-center py-20 bg-white rounded-xl border-2 border-dashed border-gray-200">
                     <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4 text-gray-400">
                         <Layout size={32} />
@@ -266,12 +312,12 @@ const App: React.FC = () => {
                     </button>
                 </div>
                 
-                {Object.values(activeFilters).some(v => v && v.length > 0) && (
+                {Object.values(activeFilters).some((v) => (v as string[])?.length > 0) && (
                      <button 
                         onClick={() => setActiveFilters({})}
                         className="text-xs text-red-600 bg-red-50 hover:bg-red-100 px-3 py-1.5 rounded-md font-medium transition-colors ml-2"
                      >
-                         Clear {Object.values(activeFilters).flat().length} Filters
+                         Clear {(Object.values(activeFilters) as string[][]).flat().length} Filters
                      </button>
                 )}
             </div>
